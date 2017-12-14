@@ -1,23 +1,61 @@
-// Package main provides ...
+// Package main provides entry point for looop
 package main
 
 import (
-	bin "encoding/binary"
+	"bufio"
+	"encoding/binary"
 	"fmt"
+	"io"
 	"log"
 	"net"
 )
 
-const protoVersion byte = 0x01
+const version byte = 0x01
 
 var (
-	magic = bin.LittleEndian.Uint32([]byte{'l', 'o', 'p', protoVersion})
+	header = binary.LittleEndian.Uint32([]byte{'l', 'o', 'p', version})
 )
 
-type pktHdr struct {
-	magic   []byte
-	version byte
+// message represents wire format
+type message struct {
+	header  [4]byte
 	length  uint32
+	payload []byte
+}
+
+func (m *message) validHeader() bool {
+	return binary.LittleEndian.Uint32(m.header[:]) == header
+}
+
+func (m *message) encode() {
+}
+
+func (m *message) decode() {
+}
+
+func handleConnection(conn net.Conn) {
+	defer conn.Close()
+	buf := make([]byte, 1024)
+	_, err := conn.Read(buf[:4])
+	if err != nil {
+		return
+	}
+	hdr := binary.LittleEndian.Uint32(buf[:4])
+	if hdr != header {
+		fmt.Println("Closing connection, unknown protocol header!", buf[:4])
+		return
+	}
+	rd := bufio.NewReader(conn)
+	for {
+		n, err := rd.Read(buf)
+		if err != nil && err == io.EOF {
+			fmt.Println("Got EOF!")
+			break
+		}
+		fmt.Printf("n: %d, %s, ra: %v\n", n, buf[:n], conn.RemoteAddr())
+	}
+
+	fmt.Printf("finished\n")
 }
 
 func main() {
@@ -27,27 +65,18 @@ func main() {
 	if err != nil {
 		log.Fatalf("Could not resolve: %v\n", err)
 	}
-
 	listener, err := net.ListenTCP("tcp4", addr)
-	_ = listener
 	if err != nil {
 		log.Fatalf("Could not listen: %v\n", err)
 	}
 
-	bb := make([]uint8, 4)
-	ret := bin.PutUvarint(bb, uint64(0xab))
-	fmt.Printf("ret: %d, %#v\n", ret, bb)
-	for i := range bb {
-		fmt.Printf("%x\n", bb[i])
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			log.Fatal(err)
+		}
+		go handleConnection(conn)
 	}
-	bc := make([]byte, 2)
-	bin.BigEndian.PutUint16(bc, 0xabcd)
-	fmt.Printf("bigend: %#v\n", bc)
-
-	le := make([]byte, 2)
-	bin.LittleEndian.PutUint16(le, 0xabcd)
-	fmt.Printf("little: %#v\n", le)
-	fmt.Printf("%#v\n", magic)
 	// conn, err := listener.Accept()
 	// conn.Write([]byte("What the fuck!\n"))
 }
