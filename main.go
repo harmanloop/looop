@@ -8,8 +8,10 @@ import (
 	"io"
 	"log"
 	"net"
+	"os"
+	"os/signal"
 	"sync"
-	"time"
+	"syscall"
 )
 
 const version byte = 0x01
@@ -29,18 +31,13 @@ func (m *Message) validHeader() bool {
 	return m.Header == header
 }
 
-func (m *Message) encode() {
-}
-
-func (m *Message) decode() {
-}
-
 // ClientConn represents the connection between server and client
 type ClientConn struct {
 	net.Conn
-	ID  uint32
-	in  chan *Message
-	out chan *Message
+	wg   *sync.WaitGroup
+	in   chan *Message
+	out  chan *Message
+	done chan struct{}
 }
 
 func validHeader(rd io.Reader) bool {
@@ -53,22 +50,7 @@ func validHeader(rd io.Reader) bool {
 	return hdr != header
 }
 
-func handleConnection(conn *ClientConn) {
-	defer conn.Close()
-	buf := make([]byte, 1024)
-	rd := bufio.NewReader(conn)
-	for {
-		n, err := rd.Read(buf)
-		if err != nil && err == io.EOF {
-			fmt.Println("Got EOF!")
-			break
-		}
-		fmt.Printf("n: %d, %s, ra: %v, err: %v\n", n, buf[:n], conn.RemoteAddr(), err)
-	}
-	fmt.Printf("finished\n")
-}
-
-func handleRead(conn net.Conn, wg *sync.WaitGroup, done <-chan struct{}, in chan<- *Message) {
+func handleRead(conn *ClientConn, wg *sync.WaitGroup, done <-chan struct{}) {
 	rd := bufio.NewReader(conn)
 L:
 	for {
@@ -82,7 +64,7 @@ L:
 		}
 		fmt.Printf("n: %d, %s, ra: %v, err: %v\n", n, buf[:n], conn.RemoteAddr(), err)
 		select {
-		case in <- &Message{Payload: buf[:n]}:
+		case conn.in <- &Message{Payload: buf[:n]}:
 		case <-done:
 			break L
 		}
@@ -90,12 +72,12 @@ L:
 	wg.Done()
 }
 
-func handleWrite(conn net.Conn, wg *sync.WaitGroup, done <-chan struct{}, out <-chan *Message) {
+func handleWrite(conn *ClientConn, wg *sync.WaitGroup, done <-chan struct{}) {
 	var msg *Message
 L:
 	for {
 		select {
-		case msg = <-out:
+		case msg = <-conn.out:
 			n, err := conn.Write(msg.Payload)
 			if err != nil {
 				fmt.Println(err)
@@ -109,53 +91,36 @@ L:
 	wg.Done()
 }
 
-func handleThisConn(conn net.Conn) {
+func handleConn(conn *ClientConn) {
 	var wg sync.WaitGroup
-	in := make(chan *Message)
-	out := make(chan *Message)
-	done := make(chan struct{})
+	var done = make(chan struct{})
 
 	wg.Add(2)
-	go handleRead(conn, &wg, done, in)
-	go handleWrite(conn, &wg, done, out)
+	go handleRead(conn, &wg, done)
+	go handleWrite(conn, &wg, done)
 	for {
 		select {
-		case msg := <-in:
+		case msg := <-conn.in:
 			fmt.Println("reading")
 			fmt.Println(string(msg.Payload))
-		case <-time.Tick(1 * time.Second):
-			out <- &Message{Payload: []byte("fuck you\n")}
-			fmt.Println("Wow sending a message")
-			close(done)
-			conn.Close()
+		case <-conn.done:
 			goto out
 		}
 	}
 out:
+	close(done)
+	conn.Close()
 	wg.Wait()
-	fmt.Println("All done!")
+	conn.wg.Done()
 }
 
-func (c *ClientConn) startHandlers() error {
-	go func() {
-	}()
-	return nil
-}
-
-type Clients struct {
-	list []*ClientConn
-}
-
-func (c *Clients) add(cl *ClientConn) {
-}
-
-func (c *Clients) del(cl *ClientConn) {
-}
+const errNetClosing = "use of closed network connection"
 
 func main() {
-	// clients := make([]*ClientConn, 4)
-	fmt.Println("looop is preparing to disrupt the industry!")
+	var wg sync.WaitGroup
+	var clients = make([]*ClientConn, 0)
 
+	fmt.Println("looop is preparing to disrupt the industry!")
 	addr, err := net.ResolveTCPAddr("tcp4", ":3377")
 	if err != nil {
 		log.Fatalf("Could not resolve: %v\n", err)
@@ -165,16 +130,43 @@ func main() {
 		log.Fatalf("Could not listen: %v\n", err)
 	}
 
-	for {
-		conn, err := listener.Accept()
-		if err != nil {
-			log.Fatal(err)
+	listenerDone := make(chan error)
+	go func() {
+	L:
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				listenerDone <- err
+				break L
+			}
+			wg.Add(1)
+			c := &ClientConn{
+				Conn: conn,
+				wg:   &wg,
+				in:   make(chan *Message),
+				out:  make(chan *Message),
+				done: make(chan struct{}),
+			}
+			clients = append(clients, c)
+			go handleConn(c)
 		}
-		// c := &ClientConn{Conn: conn, ID: 0}
-		// clients = append(clients, c)
-		// go handleConnection(c)
-		go handleThisConn(conn)
+	}()
+
+	// Handle signals
+	sigCaught := make(chan os.Signal)
+	signal.Notify(sigCaught, syscall.SIGINT, syscall.SIGTERM)
+	select {
+	case sig := <-sigCaught:
+		fmt.Printf("Caught signal: %v\n", sig)
+		if err := listener.Close(); err != nil {
+			fmt.Println(err)
+		}
+		for _, cl := range clients {
+			close(cl.done)
+		}
+	case lerr := <-listenerDone:
+		fmt.Println(lerr)
 	}
-	// conn, err := listener.Accept()
-	// conn.Write([]byte("What the fuck!\n"))
+	wg.Wait()
+	fmt.Println("All done!")
 }
