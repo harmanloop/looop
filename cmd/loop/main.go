@@ -81,7 +81,7 @@ L:
 			n, err := conn.Write(msg.Payload)
 			if err != nil {
 				fmt.Println(err)
-				break
+				break L
 			}
 			fmt.Println("sndmsg:", n, err, string(msg.Payload))
 		case <-done:
@@ -103,6 +103,7 @@ func handleConn(conn *ClientConn) {
 		case msg := <-conn.in:
 			fmt.Println("reading")
 			fmt.Println(string(msg.Payload))
+			conn.out <- msg
 		case <-conn.done:
 			goto out
 		}
@@ -132,12 +133,11 @@ func main() {
 
 	listenerDone := make(chan error)
 	go func() {
-	L:
 		for {
 			conn, err := listener.Accept()
 			if err != nil {
 				listenerDone <- err
-				break L
+				break
 			}
 			wg.Add(1)
 			c := &ClientConn{
