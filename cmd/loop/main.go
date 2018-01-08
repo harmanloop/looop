@@ -12,12 +12,8 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
-)
 
-const version byte = 0x01
-
-var (
-	header = binary.LittleEndian.Uint32([]byte{'l', 'o', 'p', version})
+	"github.com/harmanloop/looop"
 )
 
 // Message represents wire format
@@ -28,7 +24,7 @@ type Message struct {
 }
 
 func (m *Message) validHeader() bool {
-	return m.Header == header
+	return m.Header == protocol.Header
 }
 
 // ClientConn represents the connection between server and client
@@ -47,7 +43,7 @@ func validHeader(rd io.Reader) bool {
 		return false
 	}
 	hdr := binary.LittleEndian.Uint32(buf[:])
-	return hdr != header
+	return hdr != protocol.Header
 }
 
 func handleRead(conn *ClientConn, wg *sync.WaitGroup, done <-chan struct{}) {
