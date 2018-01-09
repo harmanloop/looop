@@ -13,7 +13,7 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/harmanloop/looop"
+	"github.com/harmanloop/looop/protocol"
 )
 
 // Message represents wire format
