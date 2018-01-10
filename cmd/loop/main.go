@@ -13,6 +13,7 @@ import (
 	"sync"
 	"syscall"
 
+	"github.com/harmanloop/looop/nodeconn"
 	"github.com/harmanloop/looop/protocol"
 )
 
@@ -115,7 +116,7 @@ const errNetClosing = "use of closed network connection"
 
 func main() {
 	var wg sync.WaitGroup
-	var clients = make([]*ClientConn, 0)
+	var clients = make([]*nodeconn.NodeConn, 0)
 
 	fmt.Println("looop is preparing to disrupt the industry!")
 	addr, err := net.ResolveTCPAddr("tcp4", ":3377")
@@ -135,16 +136,20 @@ func main() {
 				listenerDone <- err
 				break
 			}
-			wg.Add(1)
-			c := &ClientConn{
-				Conn: conn,
-				wg:   &wg,
-				in:   make(chan *Message),
-				out:  make(chan *Message),
-				done: make(chan struct{}),
-			}
+			c := nodeconn.New(conn, &wg)
 			clients = append(clients, c)
-			go handleConn(c)
+			wg.Add(2)
+			go c.PollRead()
+			go c.PollWrite()
+			go func(c *nodeconn.NodeConn) {
+				for {
+					b, err := c.RawRead()
+					if err != nil {
+						continue
+					}
+					c.RawWrite(b)
+				}
+			}(c)
 		}
 	}()
 
@@ -158,10 +163,13 @@ func main() {
 			fmt.Println(err)
 		}
 		for _, cl := range clients {
-			close(cl.done)
+			cl.Close()
 		}
 	case lerr := <-listenerDone:
 		fmt.Println(lerr)
+		for _, cl := range clients {
+			cl.Close()
+		}
 	}
 	wg.Wait()
 	fmt.Println("All done!")

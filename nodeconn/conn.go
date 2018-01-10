@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"sync"
 
@@ -16,6 +17,9 @@ type NodeConn struct {
 	in   chan []byte
 	out  chan []byte
 	done chan struct{}
+
+	errMu sync.Mutex
+	err   error
 }
 
 var (
@@ -28,7 +32,12 @@ func (s *NodeConn) PollRead() {
 		buf := make([]byte, 1024)
 		n, err := s.Read(buf)
 		if err != nil {
-			fmt.Println(err)
+			if err == io.EOF {
+				fmt.Println("Got EOF during read!")
+			} else {
+				fmt.Println(err)
+			}
+			break
 		}
 		select {
 		case s.in <- buf[:n]:
@@ -89,7 +98,7 @@ func (s *NodeConn) RawRead() ([]byte, error) {
 
 func New(conn net.Conn, wg *sync.WaitGroup) *NodeConn {
 	if wg == nil {
-		panic(fmt.Sprintf("nodeconn: wg is <nil>"))
+		panic(fmt.Sprint("nodeconn: wg is <nil>"))
 	}
 	return &NodeConn{
 		Conn: conn,
