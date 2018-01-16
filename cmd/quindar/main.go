@@ -10,20 +10,25 @@ import (
 	"github.com/harmanloop/looop/nodeconn"
 )
 
-func main() {
-	var wg sync.WaitGroup
+var state struct {
+	sync.Mutex
+	stopped bool
+}
 
-	conn, err := net.Dial("tcp", ":3377")
-	if err != nil {
-		fmt.Println(err)
-		return
+var quit = make(chan bool, 1)
+
+func handleConnError(s *nodeconn.NodeConn) {
+	fmt.Println("local err handler")
+	state.Lock()
+	if state.stopped == false {
+		state.stopped = true
+		s.Stop()
 	}
-	srv := nodeconn.New(conn, &wg)
-	wg.Add(2)
-	go srv.PollRead()
-	go srv.PollWrite()
+	state.Unlock()
+	quit <- true
+}
 
-	stdin := bufio.NewScanner(os.Stdin)
+func readStdin(srv *nodeconn.NodeConn, stdin *bufio.Scanner) {
 	for stdin.Scan() {
 		s := stdin.Bytes()
 		if len(s) == 0 {
@@ -35,6 +40,28 @@ func main() {
 		b, err := srv.RawRead()
 		fmt.Printf("read from srv: %v, %v\n", b, err)
 	}
-	srv.Close()
+	quit <- true
+}
+
+func main() {
+	var wg sync.WaitGroup
+
+	conn, err := net.Dial("tcp", ":3377")
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	srv := nodeconn.NewWithErrHandler(conn, &wg, handleConnError)
+	wg.Add(2)
+	go srv.PollRead()
+	go srv.PollWrite()
+	go readStdin(srv, bufio.NewScanner(os.Stdin))
+	<-quit
+	state.Lock()
+	if state.stopped == false {
+		state.stopped = true
+		srv.Stop()
+	}
+	state.Unlock()
 	wg.Wait()
 }

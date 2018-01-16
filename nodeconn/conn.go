@@ -4,19 +4,20 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"sync"
 
 	"github.com/harmanloop/looop/protocol"
 )
 
+// NodeConn represents a connection between server and client
 type NodeConn struct {
 	net.Conn
-	wg   *sync.WaitGroup
-	in   chan []byte
-	out  chan []byte
-	done chan struct{}
+	wg          *sync.WaitGroup
+	in          chan []byte
+	out         chan []byte
+	done        chan struct{}
+	handleError func(*NodeConn)
 
 	errMu sync.Mutex
 	err   error
@@ -27,16 +28,33 @@ var (
 	errShortHdr   = errors.New("short header")
 )
 
+// set error and return true if not set previously, otherwise return false
+func (s *NodeConn) setError(err error) {
+	var callHandler bool
+	s.errMu.Lock()
+	if s.err == nil {
+		s.err = err
+		callHandler = true
+	}
+	s.errMu.Unlock()
+
+	if callHandler {
+		s.handleError(s)
+	}
+}
+
+func (s *NodeConn) Error() error {
+	defer s.errMu.Unlock()
+	s.errMu.Lock()
+	return s.err
+}
+
 func (s *NodeConn) PollRead() {
 	for {
 		buf := make([]byte, 1024)
 		n, err := s.Read(buf)
 		if err != nil {
-			if err == io.EOF {
-				fmt.Println("Got EOF during read!")
-			} else {
-				fmt.Println(err)
-			}
+			s.setError(err)
 			break
 		}
 		select {
@@ -57,7 +75,7 @@ func (s *NodeConn) PollWrite() {
 			fmt.Printf("s: %s, %v\n", string(buf), buf)
 			_, err := s.Write(buf)
 			if err != nil {
-				fmt.Println(err)
+				s.handleError(s)
 				goto Out
 			}
 		case <-s.done:
@@ -69,9 +87,10 @@ Out:
 	fmt.Println("pollWrite done!")
 }
 
-func (s *NodeConn) Close() {
+func (s *NodeConn) Stop() error {
 	close(s.done)
 	s.Conn.Close()
+	return s.Error()
 }
 
 func (s *NodeConn) RawWrite(p []byte) {
@@ -97,14 +116,19 @@ func (s *NodeConn) RawRead() ([]byte, error) {
 }
 
 func New(conn net.Conn, wg *sync.WaitGroup) *NodeConn {
+	return NewWithErrHandler(conn, wg, func(n *NodeConn) {})
+}
+
+func NewWithErrHandler(conn net.Conn, wg *sync.WaitGroup, eh func(*NodeConn)) *NodeConn {
 	if wg == nil {
 		panic(fmt.Sprint("nodeconn: wg is <nil>"))
 	}
 	return &NodeConn{
-		Conn: conn,
-		wg:   wg,
-		in:   make(chan []byte),
-		out:  make(chan []byte),
-		done: make(chan struct{}),
+		Conn:        conn,
+		wg:          wg,
+		in:          make(chan []byte),
+		out:         make(chan []byte),
+		done:        make(chan struct{}),
+		handleError: eh,
 	}
 }

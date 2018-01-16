@@ -2,7 +2,6 @@
 package main
 
 import (
-	"bufio"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -47,76 +46,19 @@ func validHeader(rd io.Reader) bool {
 	return hdr != protocol.Header
 }
 
-func handleRead(conn *ClientConn, wg *sync.WaitGroup, done <-chan struct{}) {
-	rd := bufio.NewReader(conn)
-L:
-	for {
-		buf := make([]byte, 512)
-		n, err := rd.Read(buf)
-		if err != nil {
-			if err == io.EOF {
-				fmt.Println("Got EOF during read!")
-			}
-			break
-		}
-		fmt.Printf("n: %d, %s, ra: %v, err: %v\n", n, buf[:n], conn.RemoteAddr(), err)
-		select {
-		case conn.in <- &Message{Payload: buf[:n]}:
-		case <-done:
-			break L
-		}
-	}
-	wg.Done()
-}
-
-func handleWrite(conn *ClientConn, wg *sync.WaitGroup, done <-chan struct{}) {
-	var msg *Message
-L:
-	for {
-		select {
-		case msg = <-conn.out:
-			n, err := conn.Write(msg.Payload)
-			if err != nil {
-				fmt.Println(err)
-				break L
-			}
-			fmt.Println("sndmsg:", n, err, string(msg.Payload))
-		case <-done:
-			break L
-		}
-	}
-	wg.Done()
-}
-
-func handleConn(conn *ClientConn) {
-	var wg sync.WaitGroup
-	var done = make(chan struct{})
-
-	wg.Add(2)
-	go handleRead(conn, &wg, done)
-	go handleWrite(conn, &wg, done)
-	for {
-		select {
-		case msg := <-conn.in:
-			fmt.Println("reading")
-			fmt.Println(string(msg.Payload))
-			conn.out <- msg
-		case <-conn.done:
-			goto out
-		}
-	}
-out:
-	close(done)
-	conn.Close()
-	wg.Wait()
-	conn.wg.Done()
-}
-
 const errNetClosing = "use of closed network connection"
+
+var clients = newConnList()
+
+func handleConnError(s *nodeconn.NodeConn) {
+	s = clients.del(s)
+	if s != nil {
+		s.Stop()
+	}
+}
 
 func main() {
 	var wg sync.WaitGroup
-	var clients = make([]*nodeconn.NodeConn, 0)
 
 	fmt.Println("looop is preparing to disrupt the industry!")
 	addr, err := net.ResolveTCPAddr("tcp4", ":3377")
@@ -125,7 +67,7 @@ func main() {
 	}
 	listener, err := net.ListenTCP("tcp4", addr)
 	if err != nil {
-		log.Fatalf("Could not listen: %v\n", err)
+		log.Fatalf("Failed to listen: %v\n", err)
 	}
 
 	listenerDone := make(chan error)
@@ -136,8 +78,8 @@ func main() {
 				listenerDone <- err
 				break
 			}
-			c := nodeconn.New(conn, &wg)
-			clients = append(clients, c)
+			c := nodeconn.NewWithErrHandler(conn, &wg, handleConnError)
+			clients.put(c)
 			wg.Add(2)
 			go c.PollRead()
 			go c.PollWrite()
@@ -162,15 +104,46 @@ func main() {
 		if err := listener.Close(); err != nil {
 			fmt.Println(err)
 		}
-		for _, cl := range clients {
-			cl.Close()
-		}
+		break
 	case lerr := <-listenerDone:
 		fmt.Println(lerr)
-		for _, cl := range clients {
-			cl.Close()
-		}
+		break
 	}
+	clients.forEach(func(n *nodeconn.NodeConn) {
+		delete(clients.m, n.RemoteAddr())
+		n.Stop()
+	})
 	wg.Wait()
 	fmt.Println("All done!")
+}
+
+type connList struct {
+	sync.Mutex
+	m map[net.Addr]*nodeconn.NodeConn
+}
+
+func (n *connList) put(conn *nodeconn.NodeConn) {
+	n.Lock()
+	n.m[conn.RemoteAddr()] = conn
+	n.Unlock()
+}
+
+func (n *connList) del(conn *nodeconn.NodeConn) (old *nodeconn.NodeConn) {
+	n.Lock()
+	old, _ = n.m[conn.RemoteAddr()]
+	delete(n.m, conn.RemoteAddr())
+	n.Unlock()
+	return
+}
+
+func (n *connList) forEach(fn func(s *nodeconn.NodeConn)) {
+	n.Lock()
+	for _, v := range clients.m {
+		fn(v)
+	}
+	n.Unlock()
+}
+
+func newConnList() *connList {
+	return &connList{m: make(map[net.Addr]*nodeconn.NodeConn)}
 }
