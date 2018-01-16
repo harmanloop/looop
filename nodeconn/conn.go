@@ -94,11 +94,11 @@ func (s *NodeConn) Stop() error {
 }
 
 func (s *NodeConn) RawWrite(p []byte) {
-	var pktLen [4]byte
-	binary.LittleEndian.PutUint32(pktLen[:], uint32(len(p)))
-	payload := append(pktLen[:], p...)
-	buf := append(protocol.HeaderRaw, payload...)
-	s.out <- buf
+	var header [8]byte
+	copy(header[0:4], protocol.HeaderRaw)
+	binary.LittleEndian.PutUint32(header[4:], uint32(len(p)))
+	packet := append(header[:], p...)
+	s.out <- packet
 }
 
 func (s *NodeConn) RawRead() ([]byte, error) {
