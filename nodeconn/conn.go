@@ -95,7 +95,7 @@ func (s *NodeConn) Stop() error {
 
 func (s *NodeConn) RawWrite(p []byte) {
 	var header [8]byte
-	copy(header[0:4], protocol.HeaderRaw)
+	copy(header[0:4], protocol.RawHeader)
 	binary.LittleEndian.PutUint32(header[4:], uint32(len(p)))
 	packet := append(header[:], p...)
 	s.out <- packet
@@ -104,7 +104,7 @@ func (s *NodeConn) RawWrite(p []byte) {
 func (s *NodeConn) RawRead() ([]byte, error) {
 	buf := <-s.in
 	// Drop empty messages
-	if len(buf) <= len(protocol.HeaderRaw)+4 {
+	if len(buf) <= len(protocol.RawHeader)+4 {
 		return nil, errShortHdr
 	}
 	hdr := binary.LittleEndian.Uint32(buf[0:4])

@@ -8,9 +8,9 @@ import (
 const Version byte = 0x01
 
 var (
-	// HeaderRaw - raw protocol header
-	HeaderRaw = []byte{'l', 'o', 'p', Version}
+	// RawHeader - raw protocol header
+	RawHeader = []byte{'l', 'o', 'p', Version}
 
 	// Header - protocol header
-	Header = binary.LittleEndian.Uint32(HeaderRaw)
+	Header = binary.LittleEndian.Uint32(RawHeader)
 )
