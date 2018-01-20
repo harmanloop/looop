@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/harmanloop/looop/nodeconn"
 	"github.com/harmanloop/looop/protocol"
@@ -57,6 +58,43 @@ func handleConnError(s *nodeconn.NodeConn) {
 	}
 }
 
+func handleConn(conn net.Conn, cl *connList, wg *sync.WaitGroup) {
+	var done = make(chan struct{})
+	var buf [protocol.HdrLen]byte
+
+	go func() {
+		select {
+		case <-time.After(time.Second * 3):
+			conn.Close()
+		case <-done:
+		}
+	}()
+
+	_, err := io.ReadFull(conn, buf[:])
+	close(done)
+	if err != nil {
+		conn.Close()
+		return
+	}
+	if ok := protocol.ValidHdr(buf[:]); !ok {
+		return
+	}
+	c := nodeconn.NewWithErrHandler(conn, wg, handleConnError)
+	cl.put(c)
+	wg.Add(2)
+	go c.PollRead()
+	go c.PollWrite()
+	go func(c *nodeconn.NodeConn) {
+		for {
+			b, err := c.RawRead()
+			if err != nil {
+				continue
+			}
+			c.RawWrite(b)
+		}
+	}(c)
+}
+
 func main() {
 	var wg sync.WaitGroup
 
@@ -78,20 +116,7 @@ func main() {
 				listenerDone <- err
 				break
 			}
-			c := nodeconn.NewWithErrHandler(conn, &wg, handleConnError)
-			clients.put(c)
-			wg.Add(2)
-			go c.PollRead()
-			go c.PollWrite()
-			go func(c *nodeconn.NodeConn) {
-				for {
-					b, err := c.RawRead()
-					if err != nil {
-						continue
-					}
-					c.RawWrite(b)
-				}
-			}(c)
+			go handleConn(conn, clients, &wg)
 		}
 	}()
 

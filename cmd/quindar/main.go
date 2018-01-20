@@ -55,6 +55,7 @@ func main() {
 	wg.Add(2)
 	go srv.PollRead()
 	go srv.PollWrite()
+	srv.RawWrite([]byte{})
 	go readStdin(srv, bufio.NewScanner(os.Stdin))
 	<-quit
 	state.Lock()
