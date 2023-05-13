@@ -121,7 +121,7 @@ func main() {
 	}()
 
 	// Handle signals
-	sigCaught := make(chan os.Signal)
+	sigCaught := make(chan os.Signal, 1)
 	signal.Notify(sigCaught, syscall.SIGINT, syscall.SIGTERM)
 	select {
 	case sig := <-sigCaught:
